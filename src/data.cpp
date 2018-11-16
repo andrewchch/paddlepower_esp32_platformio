@@ -11,15 +11,16 @@ The data schema is:
 
 - 2 bytes sequencing header:
   - byte 1: stroke number (0-255, cycles back to 0)
-  - byte 2: reading number (0-255 max, will give 2.5 seconds at 50Hz)
+  - byte 2: sequence number of a block of readings (0-255 max, will give 2.5 seconds at 50Hz)
 - 18 bytes of data
 
-totalling the maximum of 20 bytes per GATT packet.
+totalling the maximum of 20 bytes per GATT packet. The client is expected to reassemble blocks of
+readings using the sequence number for ordering.
 
 We also send a terminating packet of:
 
   - byte 1: stroke number
-  - byte 2: reading number
+  - byte 2: block number
   - byte 3: 0xff
   - byte 4: 0xff
 
@@ -41,9 +42,10 @@ void sendData (uint8_t data[], int stroke_index, int size, BLECharacteristic* pC
     tx_index = BLE_HEADER_BYTES;
 
     // Transfer a chunk of payload data to the tx_buffer
-    for (int i=index; i<min(index + BLE_PAYLOAD_BYTES,size); i++) {
+    for (int i=index; i<min(index + BLE_PAYLOAD_BYTES, size); i += BLE_DATA_LENGTH) {
       tx_buffer[tx_index] = data[index];
-      tx_index++;
+      tx_buffer[tx_index+1] = data[index+1];
+      tx_index += BLE_DATA_LENGTH;
     }
 
     // Send the buffer using a notify
