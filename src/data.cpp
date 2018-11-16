@@ -16,7 +16,12 @@ The data schema is:
 
 totalling the maximum of 20 bytes per GATT packet.
 
-We'll still break down 
+We also send a terminating packet of:
+
+  - byte 1: stroke number
+  - byte 2: reading number
+  - byte 3: 0xff
+  - byte 4: 0xff
 
 */
 
@@ -30,7 +35,7 @@ void sendData (uint8_t data[], int stroke_index, int size, BLECharacteristic* pC
   
   while (index < size) {
     // Set the header bytes in the tx_buffer
-    packet_index += 1;
+    packet_index++;
     tx_buffer[0] = stroke_index;
     tx_buffer[1] = packet_index;
     tx_index = BLE_HEADER_BYTES;
@@ -41,13 +46,25 @@ void sendData (uint8_t data[], int stroke_index, int size, BLECharacteristic* pC
       tx_index++;
     }
 
-    // Send the buffer
+    // Send the buffer using a notify
+    // TODO: try using indicate instead, to miniimise the risk of dropping packets
     pCharacteristic->setValue(tx_buffer, BLE_MAX_BYTES);
-    pCharacteristic->indicate();
+    pCharacteristic->notify();
 
     // Increment the readings buffer index 
     index += BLE_PAYLOAD_BYTES;
     
     delay(20); // bluetooth stack will go into congestion, if too many packets are sent
   }
+
+  // We need to send a trailing packet to indicate that this stroke data has been sent.
+  // For now, the safest value to send is to max out both bytes, i.e., an unrealistically high value
+  packet_index++;
+  tx_buffer[0] = stroke_index;
+  tx_buffer[1] = packet_index;
+  tx_buffer[2] = 0xff;
+  tx_buffer[3] = 0xff;
+
+  pCharacteristic->setValue(tx_buffer, BLE_MAX_BYTES);
+  pCharacteristic->notify();
 }
