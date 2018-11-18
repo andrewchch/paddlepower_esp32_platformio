@@ -11,6 +11,6 @@
 #define MAX_READINGS 100
    
 //Prototype for data helper functions found in data.cpp
-void sendData (uint8_t data[], int stroke_index, int size, BLECharacteristic* pCharacteristic);
+void sendData (uint8_t data[], int stroke_index, int size, BLECharacteristic* pCharacteristic, bool* canSend);
    
 #endif

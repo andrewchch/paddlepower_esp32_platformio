@@ -9,6 +9,8 @@
 #include <BLEServer.h>
 #include <BLEUtils.h>
 #include <BLE2902.h>
+#include "driver/adc.h"
+#include "esp_adc_cal.h"
 
 // Local includes
 #include "data.h"
@@ -38,6 +40,10 @@ int READING_INTERVAL_MS = 20; // Interval between readings
 float READING_THRESHOLD_KGS = 0.1;
 float NUM_RETURN_READINGS = 3; // the number of readings below threshold before we trigger a return and start sending BLE stroke data
 uint32_t stroke_start;
+char buffer[50];
+
+bool data_available = false;
+bool data_sending = false;
 
 // See the following for generating UUIDs:
 // https://www.uuidgenerator.net/
@@ -108,7 +114,10 @@ void setup() {
     */
   
   // Set up the analog read pin
-  //adcAttachPin(13);
+  //adcAttachPin(ADC1_CHANNEL_0_GPIO_NUM);
+  adc1_config_width(ADC_WIDTH_BIT_12);
+  adc1_config_channel_atten(ADC1_CHANNEL_0, ADC_ATTEN_DB_0);
+ 
   //analogSetClockDiv(255); // 1338mS  
 
   // Create the BLE Device
@@ -145,8 +154,11 @@ void setup() {
 }
 
 double readVoltage(byte pin){
-  double reading = analogRead(pin); // Reference voltage is 3v3 so maximum reading is 3v3 = 4095 in range 0 to 4095
-  if(reading < 1 || reading > 4095) return 0;
+  //double reading = analogRead(pin); // Reference voltage is 3v3 so maximum reading is 3v3 = 4095 in range 0 to 4095
+  int reading = adc1_get_raw(ADC1_CHANNEL_0);
+  sprintf(buffer, "raw = %d", reading);
+  Serial.println(buffer);  
+  if (reading < 1 || reading > 4095) return 0;
   // return -0.000000000009824 * pow(reading,3) + 0.000000016557283 * pow(reading,2) + 0.000854596860691 * reading + 0.065440348345433;
   return -0.000000000000016 * pow(reading,4) + 0.000000000118171 * pow(reading,3)- 0.000000301211691 * pow(reading,2)+ 0.001109019271794 * reading + 0.034143524634089;
 } // Added an improved polynomial, use either, comment out as required
@@ -172,28 +184,35 @@ void doubleToIntArray(double val) {
 }
 
 /* 
- * We're going to store all readings until the force drops below a given threshhold, and then send all readings at once.  
+ * We're going to store all stroke readings until the force drops below a given threshhold, and then send all readings at once.  
  */
 void gatherData( void * parameter )
 {
   for (;;) {
-    double voltage = readVoltage(36);
+    double voltage = readVoltage(ADC1_CHANNEL_0_GPIO_NUM);
     double ohms = voltageToOhms(voltage);
     reading = ohmsToKgs(ohms);
 
+    sprintf(buffer, "force = %f", reading);
+    Serial.println(buffer);
+
     // Append to the readings array
     if (reading > READING_THRESHOLD_KGS) {
+      data_available = false;
       doubleToIntArray(reading); // populates ble_data
       for (int i=0; i<BLE_DATA_LENGTH; i++) {
         readings[num_readings * BLE_DATA_LENGTH + i] = ble_data[i];
       }
-      num_readings += 1;
+      num_readings++;
       num_return_readings = 0;
     }
     else {
-      num_return_readings += 1;
+      num_return_readings++;
+
       if (num_return_readings >= NUM_RETURN_READINGS) {
-        xSemaphoreTake( semaphore, portMAX_DELAY );
+        // We're defaulting returning from a stroke now
+        // Take the semaphore because we want to lock both the readings_buffer and data_available flag 
+        //xSemaphoreTake( semaphore, portMAX_DELAY );
 
         // Transfer all available readings to a buffer so we can start sending them and continue to accumulate
         // readings for the next batch
@@ -207,8 +226,9 @@ void gatherData( void * parameter )
         num_buffer_readings = num_readings;
         num_readings = 0;
 
-        // Give the semaphore back so the sending can start
-        xSemaphoreGive( semaphore );
+        // Readings buffer populated and data_available flag set, so give the semaphore back so the sending can start
+        data_available = true;
+        //xSemaphoreGive( semaphore );
       }
     }
     delay(READING_INTERVAL_MS);        
@@ -217,16 +237,20 @@ void gatherData( void * parameter )
 
 void loop() {
     // notify changed value
-    if (deviceConnected) {
-        // Wait here for the semaphore to indicate that the reading is available, get the value and send it, then hand back the semaphore
-        xSemaphoreTake( semaphore, portMAX_DELAY );
+    if (deviceConnected && data_available && !data_sending) {
+        // Wait here for the semaphore to indicate that the data is RTS, set the flag indicating we're sending then hand back the semaphore
+        data_sending = true;
+        xSemaphoreGive( semaphore );        
 
         // Send a stroke index for sequencing, cycling back to 1
         stroke_index = (stroke_index + 1) % 255;
-        sendData(readings_buffer, stroke_index, num_readings * BLE_DATA_LENGTH, pCharacteristic);
+        sprintf(buffer, "stroke_index = %d", stroke_index);
+        Serial.println(buffer);
 
-        // Return the semaphore
-        xSemaphoreGive( semaphore );        
+        // Send all the data. Depending on the length of the stroke, could take 0.5-1.0 seconds 
+        // This will return if data becomes available and we haven't finished sending yet
+        sendData(readings_buffer, stroke_index, num_readings * BLE_DATA_LENGTH, pCharacteristic, &data_available);
+        data_sending = false; // Possibly redundant as we're doing the sending synchronously
     }
     // disconnecting
     if (!deviceConnected && oldDeviceConnected) {

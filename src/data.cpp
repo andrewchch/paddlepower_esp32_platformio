@@ -26,7 +26,7 @@ We also send a terminating packet of:
 
 */
 
-void sendData (uint8_t data[], int stroke_index, int size, BLECharacteristic* pCharacteristic) {
+void sendData (uint8_t data[], int stroke_index, int size, BLECharacteristic* pCharacteristic, bool* canSend) {
   int index = 0;
   int tx_index = 0;
   int packet_index = 0;
@@ -34,7 +34,7 @@ void sendData (uint8_t data[], int stroke_index, int size, BLECharacteristic* pC
 
   // TODO: need to add current time (millis) and length of packet to buffer
   
-  while (index < size) {
+  while (index < size && *canSend) {
     // Set the header bytes in the tx_buffer
     packet_index++;
     tx_buffer[0] = stroke_index;
